@@ -12,10 +12,10 @@ data_paths: ['data/arc-aug-1000']
 data_paths_test: []
 
 evaluators:
-  - name: arc@ARC
+  - name: sudoku@SUDOKU
 
 # Hyperparams - Training
-global_batch_size: 768
+global_batch_size: 768 
 
 epochs: 100000
 eval_interval: 10000

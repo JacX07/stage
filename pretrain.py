@@ -5,7 +5,7 @@ import math
 import yaml
 import shutil
 import copy
-
+from evaluators.sudoku import SUDOKU
 import torch
 import torch.distributed as dist
 from torch import nn
@@ -17,7 +17,7 @@ import coolname
 import hydra
 import pydantic
 from omegaconf import DictConfig
-from adam_atan2 import AdamATan2
+#from adam_atan2 import AdamATan2
 
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
@@ -147,9 +147,9 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     # Optimizers and lr
     if config.arch.puzzle_emb_ndim == 0:
         optimizers = [
-            AdamATan2(
+            torch.optim.AdamW( # <--- Modifié ici
                 model.parameters(),
-                lr=0,  # Needs to be set by scheduler
+                lr=0,  # Toujours géré par le scheduler
                 weight_decay=config.weight_decay,
                 betas=(config.beta1, config.beta2)
             )
@@ -158,10 +158,12 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
             config.lr
         ]
     elif config.freeze_weights:
+        # Cette partie utilise un autre optimiseur (SignSGD) qui est dans le repo, 
+        # donc normalement pas besoin de changer ici.
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
-                model.model.puzzle_emb.buffers(),  # type: ignore
-                lr=0,  # Needs to be set by scheduler
+                model.model.puzzle_emb.buffers(),
+                lr=0,
                 weight_decay=config.puzzle_emb_weight_decay,
                 world_size=world_size
             )
@@ -172,14 +174,14 @@ def create_model(config: PretrainConfig, train_metadata: PuzzleDatasetMetadata, 
     else:
         optimizers = [
             CastedSparseEmbeddingSignSGD_Distributed(
-                model.model.puzzle_emb.buffers(),  # type: ignore
-                lr=0,  # Needs to be set by scheduler
+                model.model.puzzle_emb.buffers(),
+                lr=0,
                 weight_decay=config.puzzle_emb_weight_decay,
                 world_size=world_size
             ),
-            AdamATan2(
+            torch.optim.AdamW( # <--- Modifié ici
                 model.parameters(),
-                lr=0,  # Needs to be set by scheduler
+                lr=0,
                 weight_decay=config.weight_decay,
                 betas=(config.beta1, config.beta2)
             )
@@ -274,17 +276,19 @@ def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
 
 
 def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetadata) -> List[Any]:
-    data_paths =config.data_paths_test if len(config.data_paths_test)>0 else config.data_paths
-    # Initialize evaluators
-    evaluators = []
-    for cfg in config.evaluators:
-        for data_path in data_paths:
-            cls = load_model_class(cfg.name, "evaluators.")(
-                data_path=data_path, eval_metadata=eval_metadata, **cfg.__pydantic_extra__
-            )  # type: ignore
-            evaluators.append(cls)
-
-    return evaluators
+   
+    print("!!! FORCAGE DE L'EVALUATEUR ARC !!!")
+    
+    # On ignore la config.evaluators et on crée l'objet manuellement
+    # On prend le chemin de test, ou le chemin de train si pas de test
+    data_path = config.data_paths_test[0] if config.data_paths_test else config.data_paths[0]
+    
+    mon_evaluateur = SUDOKU(
+        data_path=data_path,
+        eval_metadata=eval_metadata
+    )
+    
+    return [mon_evaluateur]
 
 def train_batch(config: PretrainConfig, train_state: TrainState, batch: Any, global_batch_size: int, rank: int, world_size: int):
     train_state.step += 1
@@ -573,11 +577,12 @@ def launch(hydra_config: DictConfig):
         print("NO EVAL DATA FOUND")
         eval_loader = eval_metadata = None
 
-    try:
+    '''try:
         evaluators = create_evaluators(config, eval_metadata)
     except:
         print("No evaluator found")
-        evaluators = []
+        evaluators = []'''
+    evaluators = create_evaluators(config,eval_metadata)
 
     # Train state
     train_state = init_train_state(config, train_metadata, rank=RANK, world_size=WORLD_SIZE)
@@ -612,7 +617,9 @@ def launch(hydra_config: DictConfig):
             if config.ema:
                 ema_helper.update(train_state.model)
 
-        if _iter_id >= config.min_eval_interval:
+        is_start = (_iter_id == 0)
+        is_end = (_iter_id == total_iters - 1)
+        if is_end:
             ############ Evaluation
             if RANK == 0:
                 print("EVALUATE")
