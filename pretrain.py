@@ -6,6 +6,7 @@ import yaml
 import shutil
 import copy
 from evaluators.sudoku import SUDOKU
+from evaluators.maze import MAZE_HARD
 import torch
 import torch.distributed as dist
 from torch import nn
@@ -283,7 +284,7 @@ def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetada
     # On prend le chemin de test, ou le chemin de train si pas de test
     data_path = config.data_paths_test[0] if config.data_paths_test else config.data_paths[0]
     
-    mon_evaluateur = SUDOKU(
+    mon_evaluateur = MAZE_HARD(
         data_path=data_path,
         eval_metadata=eval_metadata
     )
@@ -619,7 +620,7 @@ def launch(hydra_config: DictConfig):
 
         is_start = (_iter_id == 0)
         is_end = (_iter_id == total_iters - 1)
-        if is_end:
+        if  is_end:
             ############ Evaluation
             if RANK == 0:
                 print("EVALUATE")
