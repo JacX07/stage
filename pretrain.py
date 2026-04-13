@@ -388,14 +388,47 @@ def evaluate(
 
             # Forward
             inference_steps = 0
+            
+            # --- NOUVEAU : Mémoire pour capturer les premiers arrêts ---
+            batch_size = batch["inputs"].shape[0]
+            finished_mask = torch.zeros(batch_size, dtype=torch.bool, device="cuda")
+            saved_steps = torch.zeros(batch_size, dtype=torch.int32, device="cuda")
+            saved_preds = {}
+
             while True:
                 carry, loss, metrics, preds, all_finish = train_state.model(
                     carry=carry, batch=batch, return_keys=return_keys
                 )
                 inference_steps += 1
 
-                if all_finish:
-                    break
+                # --- NOUVEAU : Logique d'interception de l'ACT ---
+                try:
+                    # On repère celles qui s'arrêtent pour la première fois
+                    just_halted = carry.halted & (~finished_mask)
+                    
+                    if just_halted.any():
+                        # On sauvegarde leurs étapes ACT
+                        saved_steps[just_halted] = carry.steps[just_halted]
+                        
+                        # On sauvegarde leurs prédictions exactes à CE moment précis
+                        for k, v in preds.items():
+                            if k not in saved_preds:
+                                saved_preds[k] = torch.empty_like(v)
+                            saved_preds[k][just_halted] = v[just_halted]
+                        
+                        # On les marque comme terminées
+                        finished_mask = finished_mask | carry.halted
+                        
+                    # Si toutes les séquences ont fini au moins une fois, on sort
+                    if finished_mask.all() or all_finish:
+                        preds = saved_preds
+                        preds['act_steps'] = saved_steps
+                        break
+                        
+                except AttributeError:
+                    # Sécurité si on n'utilise pas le modèle TRM
+                    if all_finish:
+                        break
 
             if rank == 0:
                 print(f"  Completed inference in {inference_steps} steps")
