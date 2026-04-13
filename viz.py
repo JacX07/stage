@@ -3,7 +3,7 @@ import seaborn as sns
 import torch
 
 # 1. Votre fichier
-chemin_poids = 'model2.pth' # N'oubliez pas de remettre le bon nom
+chemin_poids = 'model3.pth' # N'oubliez pas de remettre le bon nom
 poids_dict = torch.load(chemin_poids, map_location='cpu')
 
 
@@ -15,7 +15,7 @@ for nom_couche in list(poids_dict.keys()):
 print("-----------------------------------------------------")
 
 # 2. La couche que vous voulez voir
-nom_couche_cible = '_orig_mod.model.inner.L_level.layers.0.mlp_t.down_proj.weight'
+nom_couche_cible = '_orig_mod.model.inner.lm_head.weight'
 
 if nom_couche_cible in poids_dict:
     poids_couche = poids_dict[nom_couche_cible].numpy()
