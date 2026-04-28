@@ -126,8 +126,10 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
         self.embed_scale = math.sqrt(self.config.hidden_size)
         embed_init_std = 1.0 / self.embed_scale
 
-        self.embed_tokens = CastedEmbedding(self.config.vocab_size, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
-        self.lm_head      = CastedLinear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        #self.embed_tokens = CastedEmbedding(self.config.vocab_size, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
+        self.feature_proj = CastedLinear(1, self.config.hidden_size, bias=False) # <- NOUVEAU
+        #self.lm_head      = CastedLinear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        self.lm_head = CastedLinear(self.config.hidden_size, 2, bias=False) # Binaire
         self.q_head       = CastedLinear(self.config.hidden_size, 2, bias=True)
 
         self.puzzle_emb_len = -(self.config.puzzle_emb_ndim // -self.config.hidden_size)  if self.config.puzzle_emb_len == 0 else self.config.puzzle_emb_len  # ceil div
@@ -160,8 +162,11 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
             self.q_head.bias.fill_(-5)  # type: ignore
 
     def _input_embeddings(self, input: torch.Tensor, puzzle_identifiers: torch.Tensor):
+
+        input_float = input.to(torch.float32).unsqueeze(-1)
+        embedding = self.feature_proj(input_float)
         # Token embedding
-        embedding = self.embed_tokens(input.to(torch.int32))
+        #embedding = self.embed_tokens(input.to(torch.int32))
 
         # Puzzle embeddings
         if self.config.puzzle_emb_ndim > 0:
@@ -215,9 +220,18 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
             z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
         z_H = self.L_level(z_H, z_L, **seq_info)
 
+
+        
+
         # LM Outputs
         new_carry = TinyRecursiveReasoningModel_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach())  # New carry no grad
-        output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
+        # NOUVEAU: Au lieu de prendre toutes les prédictions, on fait la moyenne du raisonnement 
+        # sur les 8 tokens (features) pour prédire 1 seule sortie, ou on prend le premier token.
+        z_H_pooled = z_H[:, self.puzzle_emb_len:].mean(dim=1) # Shape: (Batch, hidden_size)
+        output = self.lm_head(z_H_pooled) # Shape: (Batch, 2)
+        
+        # On redonne la forme (Batch, 1, 2) pour que la Loss fonctionne
+        output = output.unsqueeze(1)
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32) # Q-head; uses the first puzzle_emb position
         return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 
@@ -271,27 +285,24 @@ class TinyRecursiveReasoningModel_ACTV1(nn.Module):
             
             halted = is_last_step
 
-            # if training, and ACT is enabled
-            if self.training and (self.config.halt_max_steps > 1):
+            # --- NOUVEAU : On active l'ACT même en mode évaluation ---
+            if self.config.halt_max_steps > 1:
 
-                # Halt signal
-                # NOTE: During evaluation, always use max steps, this is to guarantee the same halting steps inside a batch for batching purposes
-                
+                # 1. On écoute le signal d'arrêt du réseau (Train ET Eval)
                 if self.config.no_ACT_continue:
                     halted = halted | (q_halt_logits > 0)
                 else:
                     halted = halted | (q_halt_logits > q_continue_logits)
 
-                # Exploration
-                min_halt_steps = (torch.rand_like(q_halt_logits) < self.config.halt_exploration_prob) * torch.randint_like(new_steps, low=2, high=self.config.halt_max_steps + 1)
-                halted = halted & (new_steps >= min_halt_steps)
+                # 2. L'exploration et la mise à jour des cibles restent UNIQUEMENT pour l'entraînement
+                if self.training:
+                    # Exploration aléatoire
+                    min_halt_steps = (torch.rand_like(q_halt_logits) < self.config.halt_exploration_prob) * torch.randint_like(new_steps, low=2, high=self.config.halt_max_steps + 1)
+                    halted = halted & (new_steps >= min_halt_steps)
 
-                if not self.config.no_ACT_continue:
-                    # Compute target Q
-                    # NOTE: No replay buffer and target networks for computing target Q-value.
-                    # As batch_size is large, there're many parallel envs.
-                    # Similar concept as PQN https://arxiv.org/abs/2407.04811
-                    _, _, (next_q_halt_logits, next_q_continue_logits), _, _ = self.inner(new_inner_carry, new_current_data)
-                    outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
+                    # Q-target
+                    if not self.config.no_ACT_continue:
+                        _, _, (next_q_halt_logits, next_q_continue_logits) = self.inner(new_inner_carry, new_current_data)
+                        outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
 
         return TinyRecursiveReasoningModel_ACTV1Carry(new_inner_carry, new_steps, halted, new_current_data), outputs

@@ -5,6 +5,7 @@ import math
 import yaml
 import shutil
 import copy
+from evaluators.diabetes import DIABETES
 from evaluators.sudoku import SUDOKU
 import torch
 import torch.distributed as dist
@@ -276,10 +277,9 @@ def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
 
 
 def create_evaluators(config: PretrainConfig, eval_metadata: PuzzleDatasetMetadata) -> List[Any]:
-   
-    print("!!! FORCAGE DE L'EVALUATEUR ARC !!!")
     
-    # On ignore la config.evaluators et on crée l'objet manuellement
+    print("!!! FORCAGE DE L'EVALUATEUR SUDOKU !!!")
+    
     # On prend le chemin de test, ou le chemin de train si pas de test
     data_path = config.data_paths_test[0] if config.data_paths_test else config.data_paths[0]
     
@@ -394,6 +394,11 @@ def evaluate(
                 inference_steps += 1
 
                 if all_finish:
+                    # --- NOUVEAU: On récupère les étapes de l'ACT ---
+                    try:
+                        preds['act_steps'] = carry.steps
+                    except AttributeError:
+                        pass # Sécurité au cas où l'architecture soit différente
                     break
 
             if rank == 0:
@@ -600,6 +605,9 @@ def launch(hydra_config: DictConfig):
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
+   
+        
+    # ==========================================
     # Training Loop
     for _iter_id in range(total_iters):
         print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
