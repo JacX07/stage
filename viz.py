@@ -3,7 +3,7 @@ import seaborn as sns
 import torch
 
 # 1. Votre fichier
-chemin_poids = 'model3.pth' # N'oubliez pas de remettre le bon nom
+chemin_poids = 'models/model_maze.pth' # N'oubliez pas de remettre le bon nom
 poids_dict = torch.load(chemin_poids, map_location='cpu')
 
 
@@ -29,7 +29,7 @@ if nom_couche_cible in poids_dict:
         
         # --- LA SOLUTION EST ICI ---
         # Au lieu de plt.show(), on sauvegarde l'image :
-        nom_image = "images/puzzle_weight.png"
+        nom_image = "images/maze_puzzle_weight.png"
         plt.savefig(nom_image, bbox_inches='tight')
         print(f"Succès ! L'image a été sauvegardée sous le nom '{nom_image}' dans votre dossier actuel.")
         
